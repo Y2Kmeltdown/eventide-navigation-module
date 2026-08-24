@@ -1,0 +1,183 @@
+{
+  "name": "tilt-compensated-compass",
+  "version": "1.1.0",
+  "description": "CMPS12 tilt-compensated compass and ATGM336H GPS service with 3D attitude, map, and telemetry widgets plus a Unix-socket telemetry stream.",
+  "author": "Eventide",
+  "dependencies": {
+    "pip": ["aiohttp", "smbus2", "pyserial", "pynmea2"]
+  },
+  "arguments": [
+    {
+      "name": "bus_number",
+      "flag": "--bus-number",
+      "type": "int",
+      "default": 1,
+      "required": false,
+      "description": "I2C bus number the CMPS12 is connected to."
+    },
+    {
+      "name": "address",
+      "flag": "--address",
+      "type": "str",
+      "default": "0xC0",
+      "required": false,
+      "description": "CMPS12 8-bit I2C address (hex string)."
+    },
+    {
+      "name": "poll_interval",
+      "flag": "--poll-interval",
+      "type": "float",
+      "default": 0.02,
+      "required": false,
+      "description": "Compass sensor poll interval in seconds."
+    },
+    {
+      "name": "stream_interval",
+      "flag": "--stream-interval",
+      "type": "float",
+      "default": 0.1,
+      "required": false,
+      "description": "Compass Unix socket stream interval in seconds."
+    },
+    {
+      "name": "gps_port",
+      "flag": "--port",
+      "type": "str",
+      "default": "/dev/ttyAMA0",
+      "required": false,
+      "description": "Serial port for the ATGM336H GPS receiver."
+    },
+    {
+      "name": "gps_baud",
+      "flag": "--baud",
+      "type": "int",
+      "default": 9600,
+      "required": false,
+      "description": "Baud rate for the ATGM336H GPS receiver."
+    }
+  ],
+  "sockets": [
+    {
+      "name": "http",
+      "type": "tcp",
+      "description": "HTTP API for compass telemetry and attitude widgets."
+    },
+    {
+      "name": "stream",
+      "type": "unix",
+      "path": "/tmp/tcc_stream.sock",
+      "description": "Line-delimited JSON compass telemetry stream."
+    },
+    {
+      "name": "gps_http",
+      "type": "tcp",
+      "description": "HTTP API for GPS map and telemetry widgets."
+    }
+  ],
+  "programs": [
+    {
+      "name": "tilt_compass_service",
+      "command": "{venv_python} {module_dir}/tcc_service.py --bus-number {arg:bus_number} --address {arg:address} --poll-interval {arg:poll_interval} --stream-interval {arg:stream_interval} --http-port {socket:http} --unix-socket {socket:stream}",
+      "directory": "{module_dir}",
+      "autostart": true,
+      "autorestart": true,
+      "startretries": 10000,
+      "priority": 10,
+      "user": "root"
+    },
+    {
+      "name": "gps_service",
+      "command": "{venv_python} {module_dir}/gps_service.py --port {arg:gps_port} --baud {arg:gps_baud} --http-port {socket:gps_http}",
+      "directory": "{module_dir}",
+      "autostart": true,
+      "autorestart": true,
+      "startretries": 10000,
+      "priority": 11,
+      "user": "root"
+    }
+  ],
+  "ui": [
+    {
+      "id": "attitude",
+      "type": "orientation3d",
+      "title": "Compass Attitude",
+      "region": "center",
+      "default": true,
+      "socket": "http",
+      "get": "/api/telemetry",
+      "interval": 100,
+      "paths": {
+        "pan": "pan",
+        "tilt": "tilt",
+        "roll": "roll"
+      }
+    },
+    {
+      "id": "telemetry",
+      "type": "telemetry",
+      "title": "Compass Telemetry",
+      "region": "sidebar",
+      "default": true,
+      "socket": "http",
+      "get": "/api/telemetry",
+      "interval": 500,
+      "rows": [
+        {"label": "Bearing", "path": "bearing", "fmt": "f1"},
+        {"label": "Pitch", "path": "pitch", "fmt": "int"},
+        {"label": "Roll", "path": "roll", "fmt": "int"},
+        {"label": "Temperature", "path": "temperature", "fmt": "int"},
+        {"label": "Mag X", "path": "mag_raw.x", "fmt": "int"},
+        {"label": "Mag Y", "path": "mag_raw.y", "fmt": "int"},
+        {"label": "Mag Z", "path": "mag_raw.z", "fmt": "int"},
+        {"label": "Accel X", "path": "accel_raw.x", "fmt": "int"},
+        {"label": "Accel Y", "path": "accel_raw.y", "fmt": "int"},
+        {"label": "Accel Z", "path": "accel_raw.z", "fmt": "int"},
+        {"label": "Gyro X", "path": "gyro_raw.x", "fmt": "int"},
+        {"label": "Gyro Y", "path": "gyro_raw.y", "fmt": "int"},
+        {"label": "Gyro Z", "path": "gyro_raw.z", "fmt": "int"},
+        {"label": "Cal System", "path": "calibration.system", "fmt": "int"},
+        {"label": "Cal Gyro", "path": "calibration.gyro", "fmt": "int"},
+        {"label": "Cal Accel", "path": "calibration.accelerometer", "fmt": "int"},
+        {"label": "Cal Mag", "path": "calibration.magnetometer", "fmt": "int"}
+      ]
+    },
+    {
+      "id": "gps_map",
+      "type": "map",
+      "title": "GPS Map",
+      "region": "center",
+      "default": true,
+      "track": {
+        "socket": "gps_http",
+        "get": "/api/track",
+        "interval": 1000,
+        "lat": "lat",
+        "lon": "lon",
+        "heading": "heading"
+      }
+    },
+    {
+      "id": "gps_telemetry",
+      "type": "telemetry",
+      "title": "GPS Telemetry",
+      "region": "sidebar",
+      "default": true,
+      "socket": "gps_http",
+      "get": "/api/telemetry",
+      "interval": 1000,
+      "rows": [
+        {"label": "Latitude", "path": "latitude", "fmt": "f6"},
+        {"label": "Longitude", "path": "longitude", "fmt": "f6"},
+        {"label": "Altitude (m)", "path": "altitude_m", "fmt": "f1"},
+        {"label": "Speed (km/h)", "path": "speed_kmh", "fmt": "f1"},
+        {"label": "Course", "path": "course", "fmt": "f1"},
+        {"label": "Fix Quality", "path": "fix_quality", "fmt": "int"},
+        {"label": "Fix", "path": "fix_quality_str"},
+        {"label": "Satellites", "path": "satellites", "fmt": "int"},
+        {"label": "Sats in View", "path": "satellites_in_view", "fmt": "int"},
+        {"label": "HDOP", "path": "hdop", "fmt": "f2"},
+        {"label": "Fix Mode", "path": "fix_mode"}
+      ]
+    }
+  ]
+}
