@@ -3,6 +3,7 @@
   "version": "1.1.0",
   "description": "CMPS12 tilt-compensated compass and ATGM336H GPS service with 3D attitude, map, and telemetry widgets plus a Unix-socket telemetry stream.",
   "author": "Eventide",
+  "recordings_subdir": "navigation",
   "dependencies": {
     "pip": ["aiohttp", "smbus2", "pyserial", "pynmea2"]
   },
@@ -77,7 +78,7 @@
   "programs": [
     {
       "name": "tilt_compass_service",
-      "command": "{venv_python} {module_dir}/tcc_service.py --bus-number {arg:bus_number} --address {arg:address} --poll-interval {arg:poll_interval} --stream-interval {arg:stream_interval} --http-port {socket:http} --unix-socket {socket:stream}",
+      "command": "{venv_python} {module_dir}/tcc_service.py --bus-number {arg:bus_number} --address {arg:address} --poll-interval {arg:poll_interval} --stream-interval {arg:stream_interval} --http-port {socket:http} --unix-socket {socket:stream} --recordings-dir {recordings_subdir}",
       "directory": "{module_dir}",
       "autostart": true,
       "autorestart": true,
@@ -87,7 +88,7 @@
     },
     {
       "name": "gps_service",
-      "command": "{venv_python} {module_dir}/gps_service.py --port {arg:gps_port} --baud {arg:gps_baud} --http-port {socket:gps_http}",
+      "command": "{venv_python} {module_dir}/gps_service.py --port {arg:gps_port} --baud {arg:gps_baud} --http-port {socket:gps_http} --recordings-dir {recordings_subdir}",
       "directory": "{module_dir}",
       "autostart": true,
       "autorestart": true,

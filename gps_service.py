@@ -11,10 +11,12 @@ Run directly for local testing:
 
 import argparse
 import asyncio
+import json
 import signal
 import threading
 import time
 from datetime import datetime, timezone
+from pathlib import Path
 
 import pynmea2
 import serial
@@ -24,15 +26,24 @@ from aiohttp import web
 class GPSService:
     """Serial NMEA reader + HTTP API for map/telemetry widgets."""
 
-    def __init__(self, port: str, baud: int, timeout: float = 1.0):
+    def __init__(
+        self,
+        port: str,
+        baud: int,
+        timeout: float = 1.0,
+        recordings_dir: str | None = None,
+    ):
         self.port = port
         self.baud = baud
         self.timeout = timeout
+        self.recordings_dir = recordings_dir
         self.latest: dict = {}
         self.lock = threading.Lock()
         self._shutdown = asyncio.Event()
         self._serial: serial.Serial | None = None
         self._thread: threading.Thread | None = None
+        self._log_file = None
+        self._log_lock = threading.Lock()
 
     def start(self) -> None:
         self._serial = serial.Serial(self.port, self.baud, timeout=self.timeout)
@@ -44,6 +55,28 @@ class GPSService:
             self._serial.close()
         if self._thread:
             self._thread.join(timeout=2.0)
+        if self._log_file:
+            with self._log_lock:
+                self._log_file.close()
+            self._log_file = None
+
+    def _start_log(self) -> None:
+        """Open a UTC-timestamped JSONL recording file."""
+        if not self.recordings_dir:
+            return
+        Path(self.recordings_dir).mkdir(parents=True, exist_ok=True)
+        ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H-%M-%SZ")
+        log_path = Path(self.recordings_dir) / f"gps_{ts}.jsonl"
+        self._log_file = open(log_path, "a", buffering=1)
+        print(f"[gps] recording to {log_path}", flush=True)
+
+    def _log(self, data: dict) -> None:
+        """Append one timestamped JSON line to the recording file."""
+        if not self._log_file:
+            return
+        entry = {"recorded_at_utc": datetime.now(timezone.utc).isoformat(), **data}
+        with self._log_lock:
+            self._log_file.write(json.dumps(entry, default=str) + "\n")
 
     def _read_loop(self) -> None:
         while self._serial and self._serial.is_open:
@@ -85,6 +118,8 @@ class GPSService:
                     "longitude": lon,
                     "has_lock": fix_quality is not None and fix_quality > 0 and lat is not None and lon is not None,
                 })
+                latest_copy = self.latest.copy()
+            self._log(latest_copy)
 
         elif stype == "RMC":
             status = getattr(msg, "status", "")
@@ -112,6 +147,8 @@ class GPSService:
                         date, msg.timestamp, tzinfo=timezone.utc
                     ).isoformat()
                 self.latest.update(update)
+                latest_copy = self.latest.copy()
+            self._log(latest_copy)
 
         elif stype == "GSA":
             mode = getattr(msg, "mode_fix_type", "")
@@ -126,6 +163,8 @@ class GPSService:
                     "hdop": hdop,
                     "vdop": vdop,
                 })
+                latest_copy = self.latest.copy()
+            self._log(latest_copy)
 
         elif stype == "GSV":
             in_view = self._int(getattr(msg, "num_sv_in_view", None))
@@ -134,6 +173,8 @@ class GPSService:
                     "timestamp": now,
                     "satellites_in_view": in_view,
                 })
+                latest_copy = self.latest.copy()
+            self._log(latest_copy)
 
         elif stype == "VTG":
             true_track = self._float(getattr(msg, "true_track", None))
@@ -148,6 +189,8 @@ class GPSService:
                     "speed_knots": speed_knots,
                     "speed_kmh": speed_kmh,
                 })
+                latest_copy = self.latest.copy()
+            self._log(latest_copy)
 
     @staticmethod
     def _dm_to_dd(value, direction) -> float | None:
@@ -227,9 +270,11 @@ async def main() -> None:
     parser.add_argument("--port", type=str, required=True, help="Serial port device.")
     parser.add_argument("--baud", type=int, required=True, help="Serial baud rate.")
     parser.add_argument("--http-port", type=int, required=True, help="HTTP API port.")
+    parser.add_argument("--recordings-dir", type=str, default=None)
     args = parser.parse_args()
 
-    service = GPSService(args.port, args.baud)
+    service = GPSService(args.port, args.baud, recordings_dir=args.recordings_dir)
+    service._start_log()
     service.start()
 
     app = web.Application()

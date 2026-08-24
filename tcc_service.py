@@ -16,6 +16,7 @@ import json
 import os
 import signal
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 from aiohttp import web
@@ -32,17 +33,20 @@ class CompassService:
         address_8bit: int,
         poll_interval: float,
         stream_interval: float,
+        recordings_dir: str | None = None,
     ):
         self.bus_number = bus_number
         self.address_8bit = address_8bit
         self.poll_interval = poll_interval
         self.stream_interval = stream_interval
+        self.recordings_dir = recordings_dir
         self.compass = CMPS12(bus_number=bus_number, address_8bit=address_8bit)
         self.latest: dict = {}
         self._stream_clients: set[asyncio.StreamWriter] = set()
         self._shutdown = asyncio.Event()
         self._poll_task: asyncio.Task | None = None
         self._stream_task: asyncio.Task | None = None
+        self._log_file = None
 
     async def start(self) -> None:
         self._poll_task = asyncio.create_task(self._poll_loop())
@@ -58,6 +62,26 @@ class CompassService:
                 except asyncio.CancelledError:
                     pass
         self.compass.close()
+        if self._log_file:
+            self._log_file.close()
+            self._log_file = None
+
+    def _start_log(self) -> None:
+        """Open a UTC-timestamped JSONL recording file."""
+        if not self.recordings_dir:
+            return
+        Path(self.recordings_dir).mkdir(parents=True, exist_ok=True)
+        ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H-%M-%SZ")
+        log_path = Path(self.recordings_dir) / f"tcc_{ts}.jsonl"
+        self._log_file = open(log_path, "a", buffering=1)
+        print(f"[tcc] recording to {log_path}", flush=True)
+
+    def _log(self, data: dict) -> None:
+        """Append one timestamped JSON line to the recording file."""
+        if not self._log_file:
+            return
+        entry = {"recorded_at_utc": datetime.now(timezone.utc).isoformat(), **data}
+        self._log_file.write(json.dumps(entry, default=str) + "\n")
 
     def _read_sync(self) -> dict:
         return self.compass.read_all_fast()
@@ -96,6 +120,7 @@ class CompassService:
                     "pitch_180": data["pitch_180"],
                     "calibration": data["calibration"],
                 }
+                self._log(self.latest)
             except Exception as exc:
                 print(f"[tcc] poll error: {exc}", flush=True)
 
@@ -185,6 +210,7 @@ async def main() -> None:
     parser.add_argument("--stream-interval", type=float, default=0.1)
     parser.add_argument("--http-port", type=int, required=True)
     parser.add_argument("--unix-socket", type=str, required=True)
+    parser.add_argument("--recordings-dir", type=str, default=None)
     args = parser.parse_args()
 
     address_8bit = int(args.address, 0)
@@ -194,7 +220,9 @@ async def main() -> None:
         address_8bit=address_8bit,
         poll_interval=args.poll_interval,
         stream_interval=args.stream_interval,
+        recordings_dir=args.recordings_dir,
     )
+    service._start_log()
     await service.start()
 
     app = web.Application()
